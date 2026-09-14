@@ -1,0 +1,32 @@
+#include <windows.h>
+
+1 RT_MANIFEST "trainer.manifest"
+
+1 VERSIONINFO
+FILEVERSION     1,2,0,0
+PRODUCTVERSION  1,2,0,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "P4G Cheat Table"
+            VALUE "FileDescription",  "Persona 4 Golden Cheat Table - standalone trainer (single-player)"
+            VALUE "FileVersion",      "1.2.0.0"
+            VALUE "InternalName",     "P4GTrainer"
+            VALUE "LegalCopyright",   "Open source - see P4GTrainer-source.zip"
+            VALUE "OriginalFilename", "P4GTrainer.exe"
+            VALUE "ProductName",      "Persona 4 Golden Cheat Table"
+            VALUE "ProductVersion",   "1.2.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

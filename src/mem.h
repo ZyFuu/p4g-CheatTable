@@ -14,7 +14,8 @@ public:
     virtual bool read(uint64_t addr, void* buf, size_t n) = 0;
     virtual bool write(uint64_t addr, const void* buf, size_t n) = 0;
     virtual uint64_t moduleBase() const = 0;                   // P4G.exe image base
-    virtual uint64_t allocExec(uint64_t nearAddr, size_t size) = 0; // RWX page within +/-2GB of `nearAddr`, 0 on failure
+    virtual uint64_t allocExec(uint64_t nearAddr, size_t size) = 0; // RW page within +/-2GB of `nearAddr`, 0 on failure
+    virtual bool protectExec(uint64_t addr, size_t n) = 0;          // RW -> RX once the cave has been written
     virtual bool freeMem(uint64_t addr) = 0;
     virtual bool writeCode(uint64_t addr, const void* buf, size_t n) = 0; // write into a code page
     virtual std::string status() const = 0;

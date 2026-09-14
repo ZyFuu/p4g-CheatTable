@@ -4,7 +4,11 @@
 #include "imgui_internal.h"
 #include "game.h"
 #include "data.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cctype>
 #include <string>
@@ -82,7 +86,11 @@ void Section(const char* title) {
     ImGui::Dummy(ImVec2(0, 2 * S));
 }
 
-void Hint(const char* text) { ImGui::PushFont(fSmall); ImGui::TextColored(V_GREY, "%s", text); ImGui::PopFont(); }
+void Hint(const char* text) {
+    ImGui::PushFont(fSmall); ImGui::PushStyleColor(ImGuiCol_Text, V_GREY); ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos(); ImGui::PopStyleColor(); ImGui::PopFont();
+}
 
 // combo with a type-to-filter box, for the long skill / persona lists
 bool ComboFilter(const char* id, uint16_t& value, const std::vector<std::pair<uint16_t, std::string>>& items, float width) {
@@ -108,6 +116,11 @@ bool ComboFilter(const char* id, uint16_t& value, const std::vector<std::pair<ui
         ImGui::EndCombo();
     }
     return changed;
+}
+
+static const char* personaName(uint16_t id) {
+    for (auto& it : personaItems) if (it.first == id) return it.second.c_str();
+    return "?";
 }
 
 bool ComboIndex(const char* id, int& idx, const char* const* names, int count, float width) {
@@ -258,6 +271,68 @@ void TabBattle() {
     Hint("Hook on the EXP gain helper (P4G.exe+1011D0): applies to Yu, every persona and every party member, before the game's 99,999 cap per battle.");
     if (!g->hookError.empty()) ImGui::TextColored(V_RED, "%s", g->hookError.c_str());
 
+    Section("SHUFFLE TIME");
+    bool sa = g->shuffleAlways();
+    if (ImGui::Checkbox("Shuffle Time after every battle", &sa)) g->setShuffleAlways(sa);
+    Hint("Removes the chance roll (30% + 20% All-Out finish + 10% per battle without one). Bosses and scripted fights stay excluded by the game.");
+    bool fc = g->forceCardsEnabled();
+    if (ImGui::Checkbox("Force the cards", &fc)) g->setForceCards(fc);
+    ImGui::SameLine(300 * S); ImGui::Text("Cards dealt"); ImGui::SameLine();
+    static const char* const COUNTS[7] = {"Game's choice", "1", "2", "3", "4", "5", "6"};
+    int fcn = g->forceCount;
+    if (ComboIndex("##fcn", fcn, COUNTS, 7, 140 * S)) { g->forceCount = fcn; g->syncForceCards(); }
+    Hint("Card 1..6 = dealt slots in order (the game deals up to 6). The game never deals two cards of the same suit or arcana: such a forced card is redrawn by it.");
+    static std::vector<std::string> cardNames; static std::vector<uint16_t> cardVals;
+    if (cardNames.empty()) {
+        static const char* const ARC[22][2] = {
+            {"Fool", "changes all dealt cards, +1 draw"}, {"Magician", "ranks up 1 skill of the equipped persona"},
+            {"Priestess", "1 dealt card becomes an Arcana card, +1 draw"}, {"Empress", "1 dealt card disappears, +1 draw"},
+            {"Emperor", "equipped persona +1 level"}, {"Hierophant", "1 dealt card becomes a Persona card"},
+            {"Lovers", "+2 draws, no item drops after battle"}, {"Chariot", "equipped persona +1 Ag"},
+            {"Justice", "equipped persona +1 St"}, {"Hermit", "shadows ignore you on this floor"},
+            {"Fortune", "equipped persona +1 Lu"}, {"Strength", "equipped persona +1 Ma"},
+            {"Hanged Man", "equipped persona +1 En"}, {"Death", "ends Shuffle Time"},
+            {"Temperance", "gain a Chest Key"}, {"Devil", "+3 draws, EXP reduced to 1"},
+            {"Tower", "+3 draws, yen reduced to 0"}, {"Star", "+1 draw, removes 1 of your picked cards"},
+            {"Moon", "+2 draws, EXP halved"}, {"Sun", "+2 draws, yen halved"},
+            {"Judgement", "no effect"}, {"Aeon", "+4 draws"} };
+        static const int WAND[10] = {20, 25, 30, 35, 40, 45, 50, 55, 60, 70}, CUPSP[10] = {6, 8, 10, 12, 14, 16, 18, 20, 22, 25};
+        char t[128];
+        cardNames.push_back("Game's draw"); cardVals.push_back(0);
+        for (int r = 1; r <= 10; r++) { snprintf(t, sizeof t, "Sword %d - skill card (rank %d)", r, r); cardNames.push_back(t); cardVals.push_back((uint16_t)(22 + r)); }
+        for (int r = 1; r <= 10; r++) { snprintf(t, sizeof t, "Coin %d - yen +%d%%", r, r * 10); cardNames.push_back(t); cardVals.push_back((uint16_t)(32 + r)); }
+        for (int r = 1; r <= 10; r++) { snprintf(t, sizeof t, "Wand %d - EXP +%d%%", r, WAND[r - 1]); cardNames.push_back(t); cardVals.push_back((uint16_t)(42 + r)); }
+        for (int r = 1; r <= 10; r++) { snprintf(t, sizeof t, "Cup %d - HP +%d%%, SP +%d%%", r, r * 10, CUPSP[r - 1]); cardNames.push_back(t); cardVals.push_back((uint16_t)(52 + r)); }
+        for (int a = 0; a < 22; a++) { snprintf(t, sizeof t, "Arcana %d %s - %s", a, ARC[a][0], ARC[a][1]); cardNames.push_back(t); cardVals.push_back((uint16_t)(a + 1)); }
+    }
+    static std::vector<const char*> cardPtrs;
+    if (cardPtrs.empty()) for (auto& n : cardNames) cardPtrs.push_back(n.c_str());
+    for (int i = 0; i < 6; i++) {
+        ImGui::PushID(500 + i);
+        if (i % 2) ImGui::SameLine(490 * S);
+        ImGui::Text("Card %d", i + 1); ImGui::SameLine();
+        int idx = 0; for (size_t k = 0; k < cardVals.size(); k++) if (cardVals[k] == g->forceCards[i]) idx = (int)k;
+        if (ComboIndex("##fc", idx, cardPtrs.data(), (int)cardPtrs.size(), 380 * S)) { g->forceCards[i] = cardVals[idx]; g->syncForceCards(); }
+        ImGui::PopID();
+    }
+    Game::ShuffleInfo si = g->shuffleInfo();
+    if (si.ok) { ImGui::TextColored(V_YELLOW, "Last battle:"); ImGui::SameLine(); ImGui::Text("%s", si.triggered ? "Shuffle Time" : "no Shuffle Time"); }
+
+    Section("DUNGEON SHADOWS");
+    static const char* const SYMS[3] = {"Game's choice", "Powerful shadows only", "Rare shadows only (gold hands)"};
+    int sm = g->symbolMode() == 2 ? 1 : (g->symbolMode() == 3 ? 2 : 0);
+    ImGui::Text("Shadow symbols"); ImGui::SameLine(160 * S);
+    if (ComboIndex("##sym", sm, SYMS, 3, 300 * S)) g->setSymbolMode(sm == 1 ? 2 : (sm == 2 ? 3 : 0));
+    Hint("Every floor has 3 encounter groups (20 normal slots, 5 powerful, 5 rare). Forces the group when the floor has one; takes effect on the next floor / re-entry.");
+    ImGui::Text("Enemy debuffs"); ImGui::SameLine(160 * S);
+    bool dAtk = g->enemyDebuff & 1, dDef = g->enemyDebuff & 2, dAgi = g->enemyDebuff & 4;
+    if (ImGui::Checkbox("Attack -1 (Tarunda)", &dAtk)) g->enemyDebuff = (g->enemyDebuff & ~1) | (dAtk ? 1 : 0);
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Defense -1 (Rakunda)", &dDef)) g->enemyDebuff = (g->enemyDebuff & ~2) | (dDef ? 2 : 0);
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Hit / Evasion -1 (Sukunda)", &dAgi)) g->enemyDebuff = (g->enemyDebuff & ~4) | (dAgi ? 4 : 0);
+    Hint("Written every 100 ms on every living enemy while a battle is running (bosses included), with a duration that never runs out.");
+
     Section("PARTY BUFFS AND CHARGES (WRITTEN EVERY 100 MS WHILE SET)");
     static const char* const BUFFS[] = {"Leave alone", "Attack", "Defense", "Agility", "Attack + Defense", "Attack + Agility", "Defense + Agility", "All three", "Clear"};
     static const char* const CHARGES[] = {"Leave alone", "Tetrakarn (repel phys)", "Makarakarn (repel magic)", "Power Charge", "Mind Charge", "Tetraja", "Tetrakarn + Makarakarn", "Power + Mind Charge", "Shields + Tetraja", "All but Tetraja", "All", "Clear"};
@@ -285,35 +360,56 @@ void TabBattle() {
     const char* pname = "?"; for (auto& it : personaItems) if (it.first == pid) pname = it.second.c_str();
     ImGui::SameLine(); ImGui::TextColored(V_YELLOW, "%s", pname);
     uint64_t tbl = g->affinityTable();
-    if (!tbl) { ImGui::TextColored(V_RED, "Affinity table pointer not readable (game not attached?)"); return; }
-    static const uint16_t AFF_VALS[] = {0x14, 0x800, 0x1000, 0x100, 0x200, 0x400, 0x0A, 0x1E, 0x100A, 0x81E};
-    static const char* const AFF_LABELS[] = {"Normal (100%)", "Weak", "Resist", "Null", "Repel", "Drain", "Normal, 50% dmg", "Normal, 150% dmg", "Resist, 50% dmg", "Weak, 150% dmg"};
-    if (ImGui::BeginTable("aff", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
-        for (int i = 0; i < 16; i++) {
-            uint64_t a = tbl + (uint64_t)pid * 32 + i * 2;
-            uint16_t v = g->r16(a);
-            ImGui::PushID(i);
-            ImGui::TableNextColumn();
-            ImGui::TextColored(i < 8 ? V_YELLOW : V_GREY, "%s", AFF_NAMES[i]);
-            ImGui::TableNextColumn();
-            int cur = -1; for (int k = 0; k < 10; k++) if (AFF_VALS[k] == v) cur = k;
-            char preview[40]; if (cur >= 0) snprintf(preview, sizeof preview, "%s", AFF_LABELS[cur]); else snprintf(preview, sizeof preview, "custom %04X", v);
-            ImGui::SetNextItemWidth(170 * S);
-            if (ImGui::BeginCombo("##a", preview)) {
-                for (int k = 0; k < 10; k++) if (ImGui::Selectable(AFF_LABELS[k], k == cur)) g->w16(a, AFF_VALS[k]);
-                ImGui::EndCombo();
+    if (!tbl) { ImGui::TextColored(V_RED, "Affinity table pointer not readable (game not attached?)"); }
+    else {
+        static const uint16_t AFF_VALS[] = {0x14, 0x800, 0x1000, 0x100, 0x200, 0x400, 0x0A, 0x1E, 0x100A, 0x81E};
+        static const char* const AFF_LABELS[] = {"Normal (100%)", "Weak", "Resist", "Null", "Repel", "Drain", "Normal, 50% dmg", "Normal, 150% dmg", "Resist, 50% dmg", "Weak, 150% dmg"};
+        if (ImGui::BeginTable("aff", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+            for (int i = 0; i < 16; i++) {
+                uint64_t a = tbl + (uint64_t)pid * 32 + i * 2;
+                uint16_t v = g->r16(a);
+                bool edited = g->affinityOverride(pid, i) != nullptr;
+                ImGui::PushID(i);
+                ImGui::TableNextColumn();
+                ImGui::TextColored(edited ? V_GREEN : (i < 8 ? V_YELLOW : V_GREY), edited ? "%s *" : "%s", AFF_NAMES[i]);
+                ImGui::TableNextColumn();
+                int cur = -1; for (int k = 0; k < 10; k++) if (AFF_VALS[k] == v) cur = k;
+                char preview[40]; if (cur >= 0) snprintf(preview, sizeof preview, "%s", AFF_LABELS[cur]); else snprintf(preview, sizeof preview, "custom %04X", v);
+                ImGui::SetNextItemWidth(170 * S);
+                if (ImGui::BeginCombo("##a", preview)) {
+                    for (int k = 0; k < 10; k++) if (ImGui::Selectable(AFF_LABELS[k], k == cur)) g->setAffinity(pid, i, AFF_VALS[k]);
+                    ImGui::EndCombo();
+                }
+                ImGui::PopID();
             }
-            ImGui::PopID();
+            ImGui::EndTable();
         }
-        ImGui::EndTable();
     }
-    Hint("Edits the loaded persona table (UNIT.TBL segment 2): the change applies wherever that persona is used and resets when the game restarts.");
+    int nThis = 0; for (auto& o : g->affOverrides) if (o.pid == pid) nThis++;
+    ImGui::Text("Edited affinities: %d on this persona, %d in total", nThis, (int)g->affOverrides.size());
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Undo this persona")) g->clearAffinities(pid);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Undo all")) g->clearAffinities(-1);
+    Hint("Edits the loaded persona table (UNIT.TBL segment 2), so the change applies wherever that persona is used. The game reloads that table at every start: edited slots (*) are re-written every 100 ms while the trainer runs, and are part of the saved configuration (ABOUT tab).");
 }
 
 void TabCharacter() {
     Section("MONEY");
-    FieldU32("yen", SAVE, 160);
+    { int v = (int)g->r32(SAVE); ImGui::SetNextItemWidth(160 * S);
+      if (ImGui::InputInt("yen", &v, 100, 10000)) { if (v < 0) v = 0; g->w32(SAVE, (uint32_t)v); if (g->freezeMoney >= 0) g->freezeMoney = v; } }
+    ImGui::SameLine();
+    bool fm = g->freezeMoney >= 0;
+    if (ImGui::Checkbox("Freeze", &fm)) g->freezeMoney = fm ? (int64_t)g->r32(SAVE) : -1;
     Section("SOCIAL STATS");
+    bool sm = g->socialMultEnabled();
+    if (ImGui::Checkbox("Gain multiplier", &sm)) g->setSocialMultEnabled(sm);
+    ImGui::SameLine(200 * S);
+    static const int SMULTS[] = {2, 3, 5, 10};
+    static const char* const SMULT_NAMES[] = {"x2", "x3", "x5", "x10"};
+    int smi = 0; for (int i = 0; i < 4; i++) if (SMULTS[i] == g->socialMult()) smi = i;
+    if (ComboIndex("##smult", smi, SMULT_NAMES, 4, 120 * S)) g->setSocialMult(SMULTS[smi]);
+    Hint("Hook on the stat-up event (P4G.exe+42675A): every gain (studying, jobs, books...) is multiplied; the game's 999 cap still applies.");
     if (ImGui::BeginTable("social", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
         ImGui::TableSetupColumn("Stat", ImGuiTableColumnFlags_WidthFixed, 130 * S);
         ImGui::TableSetupColumn("Points", ImGuiTableColumnFlags_WidthFixed, 120 * S);
@@ -360,12 +456,16 @@ void TabCharacter() {
 
 void TabSocialLinks() {
     Section("SOCIAL LINKS (23 SLOTS, FILLED IN THE ORDER THEY ARE STARTED)");
-    if (ImGui::BeginTable("sl", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY, ImVec2(0, 380 * S))) {
+    bool allFrozen = true; for (int s = 0; s < 23; s++) if (g->freezeSlink[s] < 0) allFrozen = false;
+    if (ImGui::Checkbox("Freeze the points of every link (at their current values)", &allFrozen))
+        for (int s = 0; s < 23; s++) g->freezeSlink[s] = allFrozen ? g->r16(SLINK + s * 16 + 4) : -1;
+    if (ImGui::BeginTable("sl", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY, ImVec2(0, 380 * S))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 34 * S);
         ImGui::TableSetupColumn("Link", ImGuiTableColumnFlags_WidthFixed, 300 * S);
         ImGui::TableSetupColumn("Rank (0-10)", ImGuiTableColumnFlags_WidthFixed, 130 * S);
         ImGui::TableSetupColumn("Points", ImGuiTableColumnFlags_WidthFixed, 130 * S);
+        ImGui::TableSetupColumn("Freeze", ImGuiTableColumnFlags_WidthFixed, 70 * S);
         ImGui::TableHeadersRow();
         for (int s = 0; s < 23; s++) {
             uint64_t a = SLINK + s * 16;
@@ -374,7 +474,11 @@ void TabSocialLinks() {
             ImGui::TableSetColumnIndex(0); ImGui::Text("%02d", s + 1);
             ImGui::TableSetColumnIndex(1); { uint16_t v = g->r16(a); if (ComboFilter("##cmm", v, cmmItems, 290 * S)) g->w16(a, v); }
             ImGui::TableSetColumnIndex(2); FieldU16("##rank", a + 2, 110, 10);
-            ImGui::TableSetColumnIndex(3); FieldU16("##pts", a + 4, 110, 999);
+            ImGui::TableSetColumnIndex(3);
+            { int v = g->r16(a + 4); ImGui::SetNextItemWidth(110 * S);
+              if (ImGui::InputInt("##pts", &v, 1, 10)) { if (v < 0) v = 0; if (v > 999) v = 999; g->w16(a + 4, (uint16_t)v); if (g->freezeSlink[s] >= 0) g->freezeSlink[s] = v; } }
+            ImGui::TableSetColumnIndex(4);
+            { bool fz = g->freezeSlink[s] >= 0; if (ImGui::Checkbox("##fz", &fz)) g->freezeSlink[s] = fz ? g->r16(a + 4) : -1; }
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -449,6 +553,15 @@ void TabItems() {
 }
 
 void TabAbout() {
+    Section("CONFIGURATION");
+    ImGui::TextWrapped("File: %s", g->configPath().c_str());
+    if (ImGui::Button("Save the current options", ImVec2(260 * S, 30 * S))) g->saveConfig();
+    ImGui::SameLine();
+    if (ImGui::Button("Load the saved options", ImVec2(260 * S, 30 * S))) g->loadConfig();
+    if (ImGui::Checkbox("Load at startup and re-apply every time the game is attached", &g->autoApply)) g->storeAutoApply();
+    if (!g->configStatus.empty()) ImGui::TextColored(V_GREEN, "%s", g->configStatus.c_str());
+    Hint("Everything checked or picked in the tabs is saved: hooks, multipliers, buffs, freezes (with their values), shadow symbols, enemy debuffs, item freezes, edited persona affinities.");
+
     Section("ABOUT");
     ImGui::TextWrapped("Standalone trainer for the 64-bit Steam build of Persona 4 Golden (fixed image base 140000000). Same addresses and hooks as the cheat table, no Cheat Engine required.");
     ImGui::Dummy(ImVec2(0, 8 * S));
@@ -488,6 +601,18 @@ void DrawBackground(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
 } // namespace
 
 // ---------------------------------------------------------------- public
+std::string configFilePath() {
+#ifdef _WIN32
+    wchar_t buf[MAX_PATH]; DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    std::wstring w(buf, n); size_t k = w.find_last_of(L"\\/"); w = w.substr(0, k + 1) + L"P4GTrainer.ini";
+    int m = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string out(m - 1, 0); WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, &out[0], m, nullptr, nullptr);
+    return out;
+#else
+    return "P4GTrainer.ini";
+#endif
+}
+
 void UiInit(float dpiScale) {
     S = dpiScale;
     ImGuiIO& io = ImGui::GetIO();
@@ -533,6 +658,8 @@ void UiInit(float dpiScale) {
 
     gMem = createProcessMemory();
     g = new Game(gMem);
+    g->setConfigPath(configFilePath());
+    if (g->configExists()) { if (g->configAutoApply()) g->loadConfig(); else { g->autoApply = false; g->configStatus = "Saved configuration found (auto-load is off)"; } }
 }
 
 void UiSelectTab(int t) { if (t >= 0 && t < TAB_COUNT) tab = t; }
@@ -588,6 +715,9 @@ void UiFrame(double now) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f, 0.07f, 0.085f, 0.92f));
     ImGui::BeginChild("content", ImVec2(io.DisplaySize.x - navW - 44 * S, io.DisplaySize.y - headerH - footH), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
     ImGui::PopStyleColor();
+#ifndef _WIN32
+    if (const char* sc = getenv("P4G_PREVIEW_SCROLL")) ImGui::SetScrollY((float)atof(sc));   // preview screenshots only
+#endif
     if (!g->attached() && tab != 6) {
         ImGui::Dummy(ImVec2(0, 20 * S));
         ImGui::TextColored(V_YELLOW, "Waiting for the game.");

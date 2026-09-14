@@ -116,13 +116,21 @@ public:
             if (mbi.State == MEM_FREE && len >= size + 0x10000) {
                 uint64_t cand = (start + 0xFFFF) & ~0xFFFFULL;
                 if (cand >= lo && cand + size <= start + len) {
-                    void* r = VirtualAllocEx(proc_, (LPVOID)cand, size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                    void* r = VirtualAllocEx(proc_, (LPVOID)cand, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
                     if (r) return (uint64_t)r;
                 }
             }
             p = start + len;
         }
         return 0;
+    }
+
+    bool protectExec(uint64_t addr, size_t n) override {
+        if (!proc_) return false;
+        DWORD old = 0;
+        if (!VirtualProtectEx(proc_, (LPVOID)addr, n, PAGE_EXECUTE_READ, &old)) return false;
+        FlushInstructionCache(proc_, (LPCVOID)addr, n);
+        return true;
     }
 
     bool freeMem(uint64_t addr) override {
